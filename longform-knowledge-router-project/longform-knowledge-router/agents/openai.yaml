@@ -1,0 +1,6 @@
+﻿interface:
+  display_name: "Longform Knowledge Router"
+  short_description: "Build verifiable route networks for long documents."
+  default_prompt: "Use $longform-knowledge-router to build a source-verifiable knowledge routing network for this long-form document."
+policy:
+  allow_implicit_invocation: true
