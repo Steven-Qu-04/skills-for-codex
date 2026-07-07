@@ -1,0 +1,3 @@
+{"question":"What concept is introduced and where is it supported?","mode":"local_reading"}
+{"question":"Where does the source define the core term?","mode":"source_location_query"}
+{"question":"Trace how the concept changes across the document.","mode":"concept_trace"}

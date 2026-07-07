@@ -1,0 +1,21 @@
+{
+  "agent": "Deep Reader Agent",
+  "project_dir": "<output_dir>",
+  "source_packets": "<output_dir>/reading_frame_packets.jsonl",
+  "mode": "multi-agent-required",
+  "total_frames": 0,
+  "status": "prepared",
+  "batches": [],
+  "required_v2_outputs": [
+    "graph_patches.v2.jsonl",
+    "rolling_gists.v2.jsonl",
+    "registry_updates.v2.jsonl",
+    "concept_registry.v2.jsonl",
+    "claim_registry.v2.jsonl",
+    "open_reference_ledger.v2.jsonl",
+    "revision_ledger.v2.jsonl",
+    "repair_suggestions.v2.jsonl",
+    "main_read_status.v2.jsonl",
+    "DEEP_READING_STATUS.md"
+  ]
+}

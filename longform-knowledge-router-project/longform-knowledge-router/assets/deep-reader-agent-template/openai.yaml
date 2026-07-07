@@ -1,0 +1,6 @@
+interface:
+  display_name: "Deep Reader Agent"
+  short_description: "Deep-read longform reading frames before graph indexing."
+  default_prompt: "Use AGENT.md to deep-read the assigned reading_frame_packets batch, write grounded v2 graph patches, and never treat summaries or heuristic output as real reading."
+policy:
+  allow_implicit_invocation: false

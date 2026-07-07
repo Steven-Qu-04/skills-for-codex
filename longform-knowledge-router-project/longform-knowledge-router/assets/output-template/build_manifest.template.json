@@ -1,0 +1,4 @@
+{
+  "artifact_status": "template",
+  "required_mvp2_outputs": ["book.md", "source_spans.jsonl", "atoms.jsonl", "route_graph.json", "route_index.sqlite"]
+}

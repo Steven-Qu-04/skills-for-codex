@@ -1,6 +1,6 @@
-﻿interface:
+interface:
   display_name: "Longform Knowledge Router"
-  short_description: "Build verifiable route networks for long documents."
-  default_prompt: "Use $longform-knowledge-router to build a source-verifiable knowledge routing network for this long-form document."
+  short_description: "Build route networks through real deep-reading agents."
+  default_prompt: "Use $longform-knowledge-router to build a source-verifiable knowledge routing network. Stop at the Manual Reading Gate, create a Deep Reader Agent, assign reading_frame_packets batches to workers when available, validate deep-reading v2 artifacts, promote them, and only then integrate/index."
 policy:
   allow_implicit_invocation: true

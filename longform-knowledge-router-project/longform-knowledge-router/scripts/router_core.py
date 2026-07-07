@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Shared implementation for the longform knowledge router MVP-2 scripts."""
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ def read_json(path: str | Path, default: Any = None) -> Any:
     p = Path(path)
     if not p.exists():
         return default
-    return json.loads(p.read_text(encoding="utf-8"))
+    return json.loads(p.read_text(encoding="utf-8-sig"))
 
 
 def write_json(path: str | Path, data: Any) -> None:
@@ -44,7 +44,7 @@ def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
     if not p.exists():
         return []
     out: list[dict[str, Any]] = []
-    for line in p.read_text(encoding="utf-8").splitlines():
+    for line in p.read_text(encoding="utf-8-sig").splitlines():
         if line.strip():
             out.append(json.loads(line))
     return out
@@ -336,7 +336,7 @@ def describe_figures(args: argparse.Namespace) -> None:
             "visible_facts": [],
             "contextual_interpretation": span.get("text", "") if region.get("asset_path") is None else "",
             "inferences": [],
-            "uncertainties": ["visual interpretation deferred; an AI using this skill may choose an available vision tool"],
+            "uncertainties": ["visual interpretation may be completed or refined by an AI using any available vision, OCR, screenshot, PDF-rendering, or asset-extraction toolchain"],
             "artifact_status": "deferred" if region.get("asset_path") is None else "complete",
         })
         candidates.append({
@@ -380,6 +380,54 @@ def run_reading_frames(args: argparse.Namespace) -> None:
     out = ensure_output_dir(args.output_dir)
     frames = read_jsonl(args.reading_frames)
     spans = {s["source_span_id"]: s for s in read_jsonl(args.source_spans)}
+
+    if args.mode == "manual-gate":
+        packets = []
+        templates = []
+        for frame in frames:
+            frame_spans = [spans[sid] for sid in frame["source_span_ids"] if sid in spans]
+            local_text = "\n\n".join(
+                f"[source_span_id={s['source_span_id']} anchor={s.get('markdown_anchor')} page={s.get('page')}]\n{s.get('text', '')}"
+                for s in frame_spans
+            )
+            packet_id = stable_id("packet", frame["reading_frame_id"])
+            packets.append({
+                "reading_packet_id": packet_id,
+                "reading_frame_id": frame["reading_frame_id"],
+                "frame_type": frame.get("frame_type"),
+                "source_span_ids": frame.get("source_span_ids", []),
+                "structural_path": frame.get("structural_path", []),
+                "guiding_questions": frame.get("guiding_questions", []),
+                "local_text": local_text,
+                "required_action": "AI must read this packet and produce a grounded graph patch; do not treat this packet as a graph patch.",
+            })
+            templates.append({
+                "graph_patch_id": stable_id("patch", frame["reading_frame_id"]),
+                "reading_frame_id": frame["reading_frame_id"],
+                "source_span_ids": frame.get("source_span_ids", []),
+                "new_atoms": [],
+                "candidate_edges": [],
+                "concept_terms": [],
+                "self_explanation": "Fill after actual AI reading. This field is not evidence.",
+                "artifact_status": "needs_ai_reading",
+                "execution_mode": "manual-ai-reading",
+            })
+        write_jsonl(out / "reading_frame_packets.jsonl", packets)
+        write_jsonl(out / "graph_patch_templates.jsonl", templates)
+        write_json(out / "manual_reading_required.json", {
+            "artifact_status": "blocked_until_ai_reads_frames",
+            "frame_count": len(frames),
+            "packets": "reading_frame_packets.jsonl",
+            "templates": "graph_patch_templates.jsonl",
+            "required_output": "graph_patches.jsonl",
+            "rule": "Do not continue to integrate_graph_patches until an AI has read each packet and written grounded graph patches.",
+        })
+        raise SystemExit(
+            "Manual Reading Gate: reading_frame_packets.jsonl and graph_patch_templates.jsonl were written. "
+            "Read each packet, write grounded graph_patches.jsonl, rolling_gists.jsonl, registry_updates.jsonl, "
+            "and repair_suggestions.jsonl, then continue. Use --mode heuristic-demo only for smoke tests."
+        )
+
     patches = []
     gists = []
     registry_updates = []
@@ -399,12 +447,13 @@ def run_reading_frames(args: argparse.Namespace) -> None:
                 "atom_type": "claim" if frame["frame_type"] == "main" else "figure_interpretation",
                 "text": text[:1200],
                 "source_span_ids": frame["source_span_ids"],
-                "confidence": 0.65 if terms else 0.35,
+                "confidence": 0.35,
             }] if text else [],
             "candidate_edges": [],
             "concept_terms": terms,
-            "self_explanation": "Heuristic MVP-2 reading pass; self-explanation is navigation memory, not evidence.",
-            "artifact_status": "complete",
+            "self_explanation": "Heuristic demo only; this is not a real reading result and must not be used for MVP-2 builds.",
+            "artifact_status": "demo_only",
+            "execution_mode": "heuristic-demo",
         })
         gists.append({
             "rolling_gist_id": stable_id("gist", frame["reading_frame_id"]),
@@ -412,6 +461,7 @@ def run_reading_frames(args: argparse.Namespace) -> None:
             "source_span_ids": frame["source_span_ids"],
             "gist": text[:280],
             "not_evidence": True,
+            "execution_mode": "heuristic-demo",
         })
         for term in terms:
             registry_updates.append({
@@ -419,6 +469,7 @@ def run_reading_frames(args: argparse.Namespace) -> None:
                 "term": term,
                 "source_span_ids": frame["source_span_ids"],
                 "reading_frame_id": frame["reading_frame_id"],
+                "execution_mode": "heuristic-demo",
             })
         if not text:
             repairs.append({
@@ -431,7 +482,6 @@ def run_reading_frames(args: argparse.Namespace) -> None:
     write_jsonl(out / "rolling_gists.jsonl", gists)
     write_jsonl(out / "registry_updates.jsonl", registry_updates)
     write_jsonl(out / "repair_suggestions.jsonl", repairs)
-
 
 def integrate_graph_patches(args: argparse.Namespace) -> None:
     out = ensure_output_dir(args.output_dir)
@@ -624,6 +674,48 @@ def build_route_index(args: argparse.Namespace) -> None:
     con.close()
 
 
+def build_figure_atlas(args: argparse.Namespace) -> None:
+    out = ensure_output_dir(args.output_dir)
+    readings = read_jsonl(args.figure_readings) if args.figure_readings else read_jsonl(out / "figure_readings.jsonl")
+    route_nodes = read_jsonl(args.route_nodes) if args.route_nodes else read_jsonl(out / "route_nodes.jsonl")
+    nodes_by_span: dict[str, list[str]] = defaultdict(list)
+    for node in route_nodes:
+        for sid in node.get("source_span_ids", []):
+            nodes_by_span[sid].append(node.get("route_node_id"))
+
+    figures = []
+    incomplete = []
+    for idx, reading in enumerate(readings, start=1):
+        source_span_id = reading.get("source_span_id")
+        status = reading.get("artifact_status", "unknown")
+        if status != "complete":
+            incomplete.append(reading.get("figure_reading_id"))
+        figures.append({
+            "figure_atlas_entry_id": stable_id("figatlas", reading.get("figure_reading_id", idx)),
+            "ordinal": idx,
+            "figure_reading_id": reading.get("figure_reading_id"),
+            "visual_region_id": reading.get("visual_region_id"),
+            "source_span_id": source_span_id,
+            "asset_path": reading.get("asset_path"),
+            "route_node_ids": sorted(nid for nid in nodes_by_span.get(source_span_id, []) if nid),
+            "visible_facts": reading.get("visible_facts", []),
+            "contextual_interpretation": reading.get("contextual_interpretation", ""),
+            "inferences": reading.get("inferences", []),
+            "uncertainties": reading.get("uncertainties", []),
+            "reading_status": status,
+        })
+
+    write_json(out / "figure_atlas.json", {
+        "artifact_status": "complete",
+        "generated_at": now(),
+        "tool_policy": "agent_may_choose_any_available_vision_ocr_screenshot_pdf_or_asset_extraction_toolchain",
+        "result_contract": "figure_atlas_required_even_when_individual_readings_are_uncertain",
+        "figure_count": len(figures),
+        "incomplete_reading_ids": incomplete,
+        "figures": figures,
+    })
+
+
 def build_stub_json(args: argparse.Namespace, name: str) -> None:
     out = ensure_output_dir(args.output_dir)
     write_json(out / name, {"artifact_status": "deferred", "target_mvp": "mvp3", "reason": RESERVED_REASON})
@@ -751,13 +843,255 @@ def verify_evidence(args: argparse.Namespace) -> None:
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
+def create_deep_reader_agent(args: argparse.Namespace) -> None:
+    out = Path(args.output_dir)
+    packets = read_jsonl(out / "reading_frame_packets.jsonl")
+    if not packets:
+        raise SystemExit(f"no reading_frame_packets.jsonl rows found in {out}")
+    batch_size = max(1, int(args.batch_size))
+    agent_dir = Path(args.agent_dir) if args.agent_dir else out / "deep-reader-agent"
+    skill_dir = Path(__file__).resolve().parents[1]
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    batches = []
+    for start in range(1, len(packets) + 1, batch_size):
+        end = min(start + batch_size - 1, len(packets))
+        batches.append({
+            "batch_id": f"batch_{start:04d}_{end:04d}",
+            "start": start,
+            "end": end,
+            "status": "pending",
+            "output_prefix": f"deep_reading_shards/batch_{start:04d}_{end:04d}",
+        })
+    manifest = {
+        "agent": "Deep Reader Agent",
+        "project_dir": str(out),
+        "skill_dir": str(skill_dir),
+        "skill_files_to_read": [
+            str(skill_dir / "SKILL.md"),
+            str(skill_dir / "references" / "deep_reading_agent_protocol.md"),
+            str(skill_dir / "references" / "reading_context_protocol.md"),
+            str(skill_dir / "references" / "graph_model.md"),
+        ],
+        "source_packets": str(out / "reading_frame_packets.jsonl"),
+        "mode": args.mode,
+        "total_frames": len(packets),
+        "batch_size": batch_size,
+        "status": "prepared",
+        "multi_agent_policy": {
+            "required": args.mode == "multi-agent-required",
+            "fail_closed_if_unavailable": args.mode == "multi-agent-required",
+            "fallback": "single-agent" if args.mode != "multi-agent-required" else "blocked",
+        },
+        "batches": batches,
+        "required_v2_outputs": [
+            "graph_patches.v2.jsonl",
+            "rolling_gists.v2.jsonl",
+            "registry_updates.v2.jsonl",
+            "concept_registry.v2.jsonl",
+            "claim_registry.v2.jsonl",
+            "open_reference_ledger.v2.jsonl",
+            "revision_ledger.v2.jsonl",
+            "repair_suggestions.v2.jsonl",
+            "main_read_status.v2.jsonl",
+            "DEEP_READING_STATUS.md",
+        ],
+    }
+    write_json(agent_dir / "BATCH_MANIFEST.json", manifest)
+    (agent_dir / "openai.yaml").write_text(
+        "interface:\n"
+        "  display_name: \"Deep Reader Agent\"\n"
+        "  short_description: \"Deep-read longform reading frames before graph indexing.\"\n"
+        "  default_prompt: \"Use AGENT.md to deep-read assigned reading_frame_packets batches and write grounded v2 graph patches.\"\n"
+        "policy:\n"
+        "  allow_implicit_invocation: false\n",
+        encoding="utf-8",
+    )
+    agent_md = f"""# Deep Reader Agent
+
+## Mission
+
+Deep-read `{out / 'reading_frame_packets.jsonl'}` and produce source-verifiable v2 reading artifacts before route graph/index construction.
+
+Before reading any frame, read these skill files:
+
+- `{skill_dir / 'SKILL.md'}`
+- `{skill_dir / 'references' / 'deep_reading_agent_protocol.md'}`
+- `{skill_dir / 'references' / 'reading_context_protocol.md'}`
+- `{skill_dir / 'references' / 'graph_model.md'}`
+
+Also read `{skill_dir / 'references' / 'read_agent_atandard.md'}` and workspace `read_agent_atandard.md` when available as a project override. Treat these as active constraints, not background documentation.
+
+## Mode
+
+`{args.mode}`
+
+If mode is `multi-agent-required` and no worker/sub-agent capability is available, mark the build blocked. Do not claim real full-text reading.
+
+## Outputs
+
+Write v2 artifacts in `{out}`:
+
+- `graph_patches.v2.jsonl`
+- `rolling_gists.v2.jsonl`
+- `registry_updates.v2.jsonl`
+- `concept_registry.v2.jsonl`
+- `claim_registry.v2.jsonl`
+- `open_reference_ledger.v2.jsonl`
+- `revision_ledger.v2.jsonl`
+- `repair_suggestions.v2.jsonl`
+- `main_read_status.v2.jsonl`
+- `DEEP_READING_STATUS.md`
+
+## Rules
+
+1. Read each assigned frame's `local_text`.
+2. Do not use `heuristic-demo`.
+3. Do not generate patches from keywords alone.
+4. Every atom must have `source_span_ids`.
+5. Every semantic edge must have `evidence_span_ids`.
+6. Mark unreadable frames as `repair_required`.
+7. Never promote v2 files until `validate_deep_reading.py` passes.
+"""
+    (agent_dir / "AGENT.md").write_text(agent_md, encoding="utf-8")
+    status = [
+        "# Deep Reading Status",
+        "",
+        "Current status: `prepared`",
+        "",
+        f"Agent directory: `{agent_dir}`",
+        f"Mode: `{args.mode}`",
+        f"Frames: {len(packets)}",
+        f"Batches: {len(batches)}",
+        "",
+        "Do not report `deep_read_complete` until every frame has a deep-read patch or explicit repair and validation passes.",
+        "",
+    ]
+    (out / "DEEP_READING_STATUS.md").write_text("\n".join(status), encoding="utf-8")
+    print(json.dumps({"agent_dir": str(agent_dir), "frames": len(packets), "batches": len(batches), "mode": args.mode}, ensure_ascii=False, indent=2))
+
+
+def validate_deep_reading(args: argparse.Namespace) -> None:
+    out = Path(args.output_dir)
+    required_v2_files = [
+        "graph_patches.v2.jsonl",
+        "rolling_gists.v2.jsonl",
+        "registry_updates.v2.jsonl",
+        "concept_registry.v2.jsonl",
+        "claim_registry.v2.jsonl",
+        "open_reference_ledger.v2.jsonl",
+        "revision_ledger.v2.jsonl",
+        "repair_suggestions.v2.jsonl",
+        "main_read_status.v2.jsonl",
+    ]
+    missing_required_v2_files = [name for name in required_v2_files if not (out / name).exists()]
+    packets = read_jsonl(out / "reading_frame_packets.jsonl")
+    patches = read_jsonl(out / "graph_patches.v2.jsonl")
+    repairs = read_jsonl(out / "repair_suggestions.v2.jsonl")
+    statuses = read_jsonl(out / "main_read_status.v2.jsonl")
+    gists = read_jsonl(out / "rolling_gists.v2.jsonl")
+    registry_updates = read_jsonl(out / "registry_updates.v2.jsonl")
+    packet_frame_ids = {p.get("reading_frame_id") for p in packets}
+    patch_frame_ids = {p.get("reading_frame_id") for p in patches}
+    repair_frame_ids = {r.get("reading_frame_id") for r in repairs}
+    status_frame_ids = {s.get("reading_frame_id") for s in statuses}
+    covered_frame_ids = patch_frame_ids | repair_frame_ids
+    missing_frames = sorted(fid for fid in packet_frame_ids if fid and fid not in covered_frame_ids)
+    missing_status_frames = sorted(fid for fid in packet_frame_ids if fid and fid not in status_frame_ids)
+    heuristic_demo_patches = [
+        p.get("graph_patch_id", "unknown") for p in patches
+        if p.get("execution_mode") == "heuristic-demo" or p.get("artifact_status") == "demo_only"
+    ]
+    non_deep_patches = [
+        p.get("graph_patch_id", "unknown") for p in patches
+        if p.get("artifact_status") == "complete" and p.get("execution_mode") != "deep-manual-ai-reading"
+    ]
+    atoms_missing_sources = []
+    semantic_edges_missing_evidence = []
+    for patch in patches:
+        for atom in patch.get("new_atoms", []):
+            if not atom.get("source_span_ids"):
+                atoms_missing_sources.append({"graph_patch_id": patch.get("graph_patch_id"), "atom_candidate_id": atom.get("atom_candidate_id")})
+        for edge in patch.get("candidate_edges", []):
+            if edge.get("edge_class") == "semantic" and not edge.get("evidence_span_ids"):
+                semantic_edges_missing_evidence.append({"graph_patch_id": patch.get("graph_patch_id"), "edge_candidate_id": edge.get("edge_candidate_id") or edge.get("route_edge_id")})
+    memory_marked_as_evidence = []
+    for row in gists:
+        if row.get("not_evidence") is False or row.get("evidence_source"):
+            memory_marked_as_evidence.append({"file": "rolling_gists.v2.jsonl", "id": row.get("rolling_gist_id")})
+    for row in registry_updates:
+        if row.get("not_evidence") is False or row.get("evidence_source"):
+            memory_marked_as_evidence.append({"file": "registry_updates.v2.jsonl", "id": row.get("registry_update_id")})
+    issues = {
+        "missing_required_v2_files": missing_required_v2_files,
+        "missing_frames": missing_frames,
+        "missing_status_frames": missing_status_frames,
+        "heuristic_demo_patches": heuristic_demo_patches,
+        "non_deep_patches": non_deep_patches,
+        "atoms_missing_sources": atoms_missing_sources,
+        "semantic_edges_missing_evidence": semantic_edges_missing_evidence,
+        "memory_marked_as_evidence": memory_marked_as_evidence,
+    }
+    failed = any(issues.values())
+    report = {
+        "artifact_status": "failed" if failed else "complete",
+        "frame_count": len(packet_frame_ids),
+        "patch_count": len(patches),
+        "repair_count": len(repairs),
+        "status_count": len(statuses),
+        "checks": {
+            "required_v2_files_exist": not missing_required_v2_files,
+            "all_frames_have_patch_or_repair": not missing_frames,
+            "all_frames_have_main_read_status": not missing_status_frames,
+            "no_heuristic_demo": not heuristic_demo_patches,
+            "deep_manual_execution_mode": not non_deep_patches,
+            "atoms_have_source_spans": not atoms_missing_sources,
+            "semantic_edges_have_evidence": not semantic_edges_missing_evidence,
+            "memory_not_evidence": not memory_marked_as_evidence,
+        },
+        "issues": issues,
+    }
+    write_json(out / "deep_reading_validation_report.json", report)
+    if failed:
+        raise SystemExit(json.dumps(report, ensure_ascii=False, indent=2))
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+def promote_deep_reading(args: argparse.Namespace) -> None:
+    out = Path(args.output_dir)
+    report = read_json(out / "deep_reading_validation_report.json", {})
+    if report.get("artifact_status") != "complete" and not args.force:
+        raise SystemExit("deep_reading_validation_report.json is not complete; run validate_deep_reading.py or pass --force")
+    mappings = {
+        "graph_patches.v2.jsonl": "graph_patches.jsonl",
+        "rolling_gists.v2.jsonl": "rolling_gists.jsonl",
+        "registry_updates.v2.jsonl": "registry_updates.jsonl",
+        "repair_suggestions.v2.jsonl": "repair_suggestions.jsonl",
+        "main_read_status.v2.jsonl": "main_read_status.jsonl",
+        "concept_registry.v2.jsonl": "concept_registry.jsonl",
+        "claim_registry.v2.jsonl": "claim_registry.jsonl",
+        "open_reference_ledger.v2.jsonl": "open_reference_ledger.jsonl",
+        "revision_ledger.v2.jsonl": "revision_ledger.jsonl",
+    }
+    promoted = []
+    missing = []
+    for src, dst in mappings.items():
+        src_path = out / src
+        if src_path.exists():
+            (out / dst).write_text(src_path.read_text(encoding="utf-8"), encoding="utf-8")
+            promoted.append(dst)
+        else:
+            missing.append(src)
+    promotion_report = {"artifact_status": "complete" if not missing else "partial", "promoted": promoted, "missing_v2_sources": missing, "validation_report": "deep_reading_validation_report.json"}
+    write_json(out / "deep_reading_promotion_report.json", promotion_report)
+    print(json.dumps(promotion_report, ensure_ascii=False, indent=2))
+
 def validate_build(args: argparse.Namespace) -> None:
     out = Path(args.output_dir)
     required = {
         "mvp0": ["book.md", "assets", "figures.jsonl", "tables.jsonl", "source_blocks.jsonl", "source_span_candidates.jsonl", "source_spans.jsonl", "source_segmentation_report.json", "build_report.md"],
         "mvp1": ["atoms.jsonl", "route_nodes.jsonl", "route_edges.jsonl", "route_graph.json"],
-        "mvp2": ["reading_frames.jsonl", "graph_patches.jsonl", "rolling_gists.jsonl", "concept_registry.jsonl", "claim_registry.jsonl", "main_read_status.jsonl", "atom_candidates.jsonl", "figure_atom_candidates.jsonl", "route_index.sqlite", "route_path_templates.jsonl", "repair_suggestions.jsonl"],
-        "mature": ["figure_atlas.json", "figure_routes.jsonl", "route_communities.jsonl", "route_reports.jsonl"],
+        "mvp2": ["reading_frames.jsonl", "graph_patches.jsonl", "rolling_gists.jsonl", "concept_registry.jsonl", "claim_registry.jsonl", "main_read_status.jsonl", "atom_candidates.jsonl", "figure_atom_candidates.jsonl", "route_index.sqlite", "route_path_templates.jsonl", "repair_suggestions.jsonl", "figure_atlas.json"],
+        "mature": ["figure_routes.jsonl", "route_communities.jsonl", "route_reports.jsonl"],
     }
     order = ["mvp0", "mvp1", "mvp2"] if args.profile != "mature" else ["mvp0", "mvp1", "mvp2", "mature"]
     if args.profile == "mvp0":
@@ -770,7 +1104,7 @@ def validate_build(args: argparse.Namespace) -> None:
             if not (out / name).exists():
                 missing.append(name)
     reserved = []
-    for name in ["figure_atlas.json", "figure_routes.jsonl", "route_communities.jsonl", "route_reports.jsonl"]:
+    for name in ["figure_routes.jsonl", "route_communities.jsonl", "route_reports.jsonl"]:
         p = out / name
         if p.exists():
             data = read_json(p, None) if p.suffix == ".json" else (read_jsonl(p)[0] if read_jsonl(p) else {})
@@ -781,23 +1115,30 @@ def validate_build(args: argparse.Namespace) -> None:
     spans = read_jsonl(out / "source_spans.jsonl")
     frames = read_jsonl(out / "reading_frames.jsonl")
     statuses = read_jsonl(out / "main_read_status.jsonl")
+    patches = read_jsonl(out / "graph_patches.jsonl")
     duplicate_main_reads = [sid for sid, count in Counter(s["source_span_id"] for s in statuses if s.get("main_read_status") == "read").items() if count > 1]
+    heuristic_demo_patches = [
+        p.get("graph_patch_id", "unknown") for p in patches
+        if p.get("execution_mode") == "heuristic-demo" or p.get("artifact_status") == "demo_only"
+    ]
     report = {
         "profile": args.profile,
-        "artifact_status": "failed" if missing or duplicate_main_reads else "complete",
+        "artifact_status": "failed" if missing or duplicate_main_reads or heuristic_demo_patches else "complete",
         "missing": missing,
         "reserved_mvp3_artifacts": reserved,
         "source_span_count": len(spans),
         "reading_frame_count": len(frames),
         "duplicate_main_reads": duplicate_main_reads,
+        "heuristic_demo_patches": heuristic_demo_patches,
         "checks": {
             "fixed_token_chunking_forbidden": True,
             "payload_not_evidence_contract": True,
-            "figure_atlas_contract_reserved": True,
+            "figure_atlas_required": True,
+            "manual_reading_required": not heuristic_demo_patches,
         },
     }
     write_json(out / "validation_report.json", report)
-    if missing or duplicate_main_reads:
+    if missing or duplicate_main_reads or heuristic_demo_patches:
         raise SystemExit(json.dumps(report, ensure_ascii=False, indent=2))
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
@@ -812,7 +1153,7 @@ def write_build_report(args: argparse.Namespace) -> None:
         f"- profile: {args.profile}",
         f"- validation_status: {validation.get('artifact_status', 'not_run')}",
         "- evidence_rule: final answers must use source spans, verified atoms, or structured extracts; not payloads or gists.",
-        "- visual_rule: figure atlas and routes preserve MVP-3 contracts; the AI using this skill may choose the available vision tool for actual image interpretation.",
+        "- visual_rule: figure_atlas.json is mandatory; the AI using this skill may choose any available vision, OCR, screenshot, PDF-rendering, or asset-extraction tool for image interpretation.",
         "",
     ]
     (out / "build_report.md").write_text("\n".join(lines), encoding="utf-8")
@@ -863,6 +1204,7 @@ def parser_for(command: str) -> argparse.ArgumentParser:
         p.add_argument("--source-spans", required=True)
         p.add_argument("--output-dir", required=True)
         p.add_argument("--profile", choices=["mvp1", "mvp2", "mature"], default="mvp2")
+        p.add_argument("--mode", choices=["manual-gate", "heuristic-demo"], default="manual-gate")
     elif command == "integrate_graph_patches":
         p.add_argument("--graph-patches", required=True)
         p.add_argument("--source-spans", required=True)
@@ -904,6 +1246,16 @@ def parser_for(command: str) -> argparse.ArgumentParser:
     elif command == "validate_build":
         p.add_argument("--output-dir", required=True)
         p.add_argument("--profile", choices=["mvp0", "mvp1", "mvp2", "mature"], default="mvp2")
+    elif command == "create_deep_reader_agent":
+        p.add_argument("--output-dir", required=True)
+        p.add_argument("--agent-dir")
+        p.add_argument("--batch-size", type=int, default=20)
+        p.add_argument("--mode", choices=["multi-agent-required", "multi-agent-preferred", "single-agent"], default="multi-agent-required")
+    elif command == "validate_deep_reading":
+        p.add_argument("--output-dir", required=True)
+    elif command == "promote_deep_reading":
+        p.add_argument("--output-dir", required=True)
+        p.add_argument("--force", action="store_true")
     elif command == "write_build_report":
         p.add_argument("--output-dir", required=True)
         p.add_argument("--profile", default="mvp2")
@@ -933,14 +1285,22 @@ def main(command: str) -> None:
         "query_route": query_route,
         "verify_evidence": verify_evidence,
         "validate_build": validate_build,
+        "create_deep_reader_agent": create_deep_reader_agent,
+        "validate_deep_reading": validate_deep_reading,
+        "promote_deep_reading": promote_deep_reading,
         "write_build_report": write_build_report,
     }
     if command == "build_figure_atlas":
-        build_stub_json(args, "figure_atlas.json")
+        build_figure_atlas(args)
     elif command == "build_figure_routes":
         build_stub_jsonl(args, ["figure_routes.jsonl"])
     elif command == "build_route_communities":
         build_stub_jsonl(args, ["route_communities.jsonl", "route_reports.jsonl"])
     else:
         dispatch[command](args)
+
+
+
+
+
 

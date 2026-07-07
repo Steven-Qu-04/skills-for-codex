@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "document",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "artifact_status": {"type": "string"},
+    "source_span_ids": {"type": "array", "items": {"type": "string"}},
+    "not_evidence": {"type": "boolean"}
+  }
+}
