@@ -13,6 +13,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from arrange_core import (
+    build_alignment_candidates as arrange_build_alignment_candidates,
+    build_cross_route_index as arrange_build_cross_route_index,
+    discover_kbs as arrange_discover_kbs,
+    query_child_kbs as arrange_query_child_kbs,
+    query_cross_route,
+    score_cross_paths,
+    validate_arrange as arrange_validate_arrange,
+    verify_cross_answer,
+    verify_cross_edges as arrange_verify_cross_edges,
+)
+
 
 RESERVED_REASON = "MVP-2 reserves this contract; full implementation belongs to MVP-3."
 STOPWORDS = {
@@ -728,6 +740,26 @@ def build_stub_jsonl(args: argparse.Namespace, names: list[str]) -> None:
 
 
 def query_route(args: argparse.Namespace) -> None:
+    scope = args.scope
+    if scope == "auto":
+        if args.cross_index:
+            scope = "cross_kb"
+        elif args.index:
+            scope = "single_kb"
+        elif args.workspace:
+            candidate = Path(args.workspace) / "arrange_output" / "cross_route_index.sqlite"
+            if candidate.exists():
+                args.cross_index = str(candidate)
+                scope = "cross_kb"
+    if scope == "cross_kb":
+        if not args.cross_index:
+            raise SystemExit("--scope cross_kb requires --cross-index")
+        if not args.mode.startswith("cross_"):
+            args.mode = "cross_synthesis"
+        query_cross_route(args)
+        return
+    if not args.index:
+        raise SystemExit("--scope single_kb requires --index")
     index = Path(args.index)
     out = Path(args.session_dir) if args.session_dir else index.parent / "query_session"
     out.mkdir(parents=True, exist_ok=True)
@@ -761,6 +793,7 @@ def query_route(args: argparse.Namespace) -> None:
         })
     route_session = {
         "route_session_id": stable_id("session", args.question, now()),
+        "scope": "single_kb",
         "question": args.question,
         "mode": args.mode,
         "strategy": args.strategy,
@@ -792,6 +825,9 @@ def score_paths(args: argparse.Namespace) -> None:
     session = read_json(args.route_session, {})
     candidate_path = Path(args.candidate_paths)
     candidates = read_jsonl(candidate_path)
+    if args.mode.startswith("cross_") or session.get("scope") == "cross_kb" or candidate_path.name == "candidate_cross_paths.jsonl":
+        score_cross_paths(args, session, candidates)
+        return
     scored = []
     rejected = []
     for path in candidates:
@@ -816,6 +852,11 @@ def score_paths(args: argparse.Namespace) -> None:
 
 def verify_evidence(args: argparse.Namespace) -> None:
     answer = read_json(args.answer, {})
+    if answer.get("scope") == "cross_kb":
+        verify_cross_answer(args, answer)
+        return
+    if not args.source_spans:
+        raise SystemExit("--source-spans is required for single_kb evidence verification")
     spans = {s["source_span_id"]: s for s in read_jsonl(args.source_spans)}
     session = read_json(args.route_session, {})
     verified_paths = read_jsonl(Path(args.route_session).parent / "verified_paths.jsonl")
@@ -1233,16 +1274,53 @@ def parser_for(command: str) -> argparse.ArgumentParser:
         p.add_argument("--route-session", required=True)
         p.add_argument("--candidate-paths", required=True)
         p.add_argument("--mode", default="local_reading")
+    elif command == "discover_kbs":
+        p.add_argument("--workspace", required=True)
+        p.add_argument("--output-dir", required=True)
+        p.add_argument("--profile", choices=["arrange_skeleton", "arrange_mvp", "arrange_mature"], default="arrange_skeleton")
+        p.add_argument("--arrange-run-type", choices=["initial", "incremental_add_kb", "incremental_reverify"], default="initial")
+    elif command == "build_alignment_candidates":
+        p.add_argument("--kb-registry", required=True)
+        p.add_argument("--output-dir", required=True)
+        p.add_argument("--max-candidates-per-kb-pair", type=int, default=200)
+        p.add_argument("--max-candidates-per-type", type=int, default=100)
+        p.add_argument("--min-label-score", type=float, default=0.3)
+        p.add_argument("--min-payload-score", type=float, default=0.2)
+    elif command == "query_child_kbs":
+        p.add_argument("--alignment-candidates", required=True)
+        p.add_argument("--kb-registry", required=True)
+        p.add_argument("--output-dir", required=True)
+    elif command == "verify_cross_edges":
+        p.add_argument("--alignment-candidates", required=True)
+        p.add_argument("--cross-evidence-paths", required=True)
+        p.add_argument("--output-dir", required=True)
+    elif command == "build_cross_route_index":
+        p.add_argument("--cross-edges", required=True)
+        p.add_argument("--cross-evidence-paths", required=True)
+        p.add_argument("--output-dir", required=True)
+        p.add_argument("--kb-registry")
+    elif command == "validate_arrange":
+        p.add_argument("--arrange-output", required=True)
+        p.add_argument("--profile", choices=["arrange_skeleton", "arrange_mvp", "arrange_mature"], default="arrange_skeleton")
     elif command == "query_route":
         p.add_argument("--question", required=True)
-        p.add_argument("--index", required=True)
-        p.add_argument("--mode", choices=["local_reading", "source_location_query", "concept_trace"], default="local_reading")
+        p.add_argument("--index")
+        p.add_argument("--scope", choices=["single_kb", "cross_kb", "auto"], default="auto")
+        p.add_argument("--kb")
+        p.add_argument("--workspace")
+        p.add_argument("--cross-index")
+        p.add_argument("--kb-registry")
+        p.add_argument("--cross-edges")
+        p.add_argument("--cross-evidence-paths")
+        p.add_argument("--mode", choices=["local_reading", "source_location_query", "concept_trace", "cross_local_reading", "cross_synthesis", "cross_concept_trace", "cross_argument_trace", "cross_conflict_trace", "cross_evidence_verification", "cross_source_verification"], default="local_reading")
         p.add_argument("--strategy", choices=["explicit_path", "graph_activation", "hybrid"], default="explicit_path")
         p.add_argument("--session-dir")
     elif command == "verify_evidence":
         p.add_argument("--answer", required=True)
-        p.add_argument("--source-spans", required=True)
+        p.add_argument("--source-spans")
         p.add_argument("--route-session", required=True)
+        p.add_argument("--cross-edges")
+        p.add_argument("--cross-evidence-paths")
     elif command == "validate_build":
         p.add_argument("--output-dir", required=True)
         p.add_argument("--profile", choices=["mvp0", "mvp1", "mvp2", "mature"], default="mvp2")
@@ -1282,6 +1360,12 @@ def main(command: str) -> None:
         "build_route_graph": build_route_graph,
         "build_route_index": build_route_index,
         "score_paths": score_paths,
+        "discover_kbs": arrange_discover_kbs,
+        "build_alignment_candidates": arrange_build_alignment_candidates,
+        "query_child_kbs": arrange_query_child_kbs,
+        "verify_cross_edges": arrange_verify_cross_edges,
+        "build_cross_route_index": arrange_build_cross_route_index,
+        "validate_arrange": arrange_validate_arrange,
         "query_route": query_route,
         "verify_evidence": verify_evidence,
         "validate_build": validate_build,

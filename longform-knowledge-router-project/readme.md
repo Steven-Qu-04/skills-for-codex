@@ -171,3 +171,26 @@ python -m pip install -r longform-knowledge-router/requirements.txt
 
 
 
+
+## 用法三：Arrange Mode，编排多个已构建知识库
+
+当一个 workspace 里已有多个 `longform-knowledge-router` 构建产物时，可以使用 Arrange Mode 生成跨知识库索引。Arrange Mode 不合并全文、不拼接多个 route graph，也不把候选关系直接当成 verified edge。
+
+```bash
+python scripts/discover_kbs.py --workspace <workspace_dir> --output-dir <arrange_output>
+python scripts/build_alignment_candidates.py --kb-registry <arrange_output>/kb_registry.jsonl --output-dir <arrange_output>
+python scripts/query_child_kbs.py --alignment-candidates <arrange_output>/alignment_candidates.jsonl --kb-registry <arrange_output>/kb_registry.jsonl --output-dir <arrange_output>
+python scripts/verify_cross_edges.py --alignment-candidates <arrange_output>/alignment_candidates.jsonl --cross-evidence-paths <arrange_output>/cross_evidence_paths.jsonl --output-dir <arrange_output>
+python scripts/build_cross_route_index.py --cross-edges <arrange_output>/cross_edges.jsonl --cross-evidence-paths <arrange_output>/cross_evidence_paths.jsonl --kb-registry <arrange_output>/kb_registry.jsonl --output-dir <arrange_output>
+python scripts/validate_arrange.py --arrange-output <arrange_output> --profile arrange_skeleton
+```
+
+## 用法四：cross_kb Read Mode，读取跨库索引
+
+```bash
+python scripts/query_route.py --question "不同知识库如何处理同一概念？" --scope cross_kb --cross-index <arrange_output>/cross_route_index.sqlite --kb-registry <arrange_output>/kb_registry.jsonl --mode cross_synthesis --session-dir <query_session_dir>
+python scripts/score_paths.py --route-session <query_session_dir>/route_session.json --candidate-paths <query_session_dir>/candidate_cross_paths.jsonl --mode cross_synthesis
+python scripts/verify_evidence.py --answer <query_session_dir>/answer.json --route-session <query_session_dir>/route_session.json --cross-edges <arrange_output>/cross_edges.jsonl --cross-evidence-paths <arrange_output>/cross_evidence_paths.jsonl
+```
+
+跨库回答必须回到 `cross_evidence_path`、child verified path 和 child source span；不能只根据 cross node summary 或 semantic payload 下结论。

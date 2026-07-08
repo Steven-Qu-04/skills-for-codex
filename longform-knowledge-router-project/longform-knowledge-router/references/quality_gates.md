@@ -14,3 +14,6 @@ Manual Reading Gate:
 - `reading_frame_packets.jsonl` must be read by the AI frame by frame.
 - `graph_patches.jsonl` must not contain `execution_mode: heuristic-demo` or `artifact_status: demo_only` for MVP-2 validation.
 - `graph_patch_templates.jsonl` is a scaffold, not a build artifact that may be integrated.
+Arrange Skeleton: required files exist, at least two valid child KBs are discovered, child query tasks are generated, `cross_route_index.sqlite` exists, and zero verified cross edges are allowed only with partial status and repair suggestions.
+
+Arrange MVP: at least one verified cross edge exists, verified edges have two-sided child evidence, `same_as` edges have strong alignment evidence, payloads are not evidence, and book-level-only cross edges are rejected.

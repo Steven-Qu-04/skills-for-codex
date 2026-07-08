@@ -55,3 +55,26 @@ The folder does not depend on files from the original workspace. Real deep readi
 
 The `skill-creator` `quick_validate.py` script mentioned in `SKILL.md` is an optional authoring-time validator, not a runtime dependency.
 
+
+## Arrange Mode
+
+Arrange Mode builds a cross-KB bridge layer over multiple already-constructed child KB output directories. It does not merge child graphs or copy full child text into the cross index.
+
+```bash
+python scripts/discover_kbs.py --workspace <workspace_dir> --output-dir <arrange_output>
+python scripts/build_alignment_candidates.py --kb-registry <arrange_output>/kb_registry.jsonl --output-dir <arrange_output>
+python scripts/query_child_kbs.py --alignment-candidates <arrange_output>/alignment_candidates.jsonl --kb-registry <arrange_output>/kb_registry.jsonl --output-dir <arrange_output>
+python scripts/verify_cross_edges.py --alignment-candidates <arrange_output>/alignment_candidates.jsonl --cross-evidence-paths <arrange_output>/cross_evidence_paths.jsonl --output-dir <arrange_output>
+python scripts/build_cross_route_index.py --cross-edges <arrange_output>/cross_edges.jsonl --cross-evidence-paths <arrange_output>/cross_evidence_paths.jsonl --kb-registry <arrange_output>/kb_registry.jsonl --output-dir <arrange_output>
+python scripts/validate_arrange.py --arrange-output <arrange_output> --profile arrange_skeleton
+```
+
+## Cross-KB Read Mode
+
+```bash
+python scripts/query_route.py --question "<cross question>" --scope cross_kb --cross-index <arrange_output>/cross_route_index.sqlite --kb-registry <arrange_output>/kb_registry.jsonl --mode cross_synthesis --session-dir <query_session_dir>
+python scripts/score_paths.py --route-session <query_session_dir>/route_session.json --candidate-paths <query_session_dir>/candidate_cross_paths.jsonl --mode cross_synthesis
+python scripts/verify_evidence.py --answer <query_session_dir>/answer.json --route-session <query_session_dir>/route_session.json --cross-edges <arrange_output>/cross_edges.jsonl --cross-evidence-paths <arrange_output>/cross_evidence_paths.jsonl
+```
+
+Cross-KB answers must cite cross evidence paths, child verified paths, and child source spans. Alignment candidates and cross summaries are navigation aids, not evidence.

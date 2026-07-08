@@ -1,13 +1,13 @@
-﻿---
+---
 name: longform-knowledge-router
-description: Construct and read source-verifiable knowledge routing networks for long-form, image-heavy documents. Use for books, PDFs, EPUBs, DOCX, reports, archives, or document folders when Codex must create anchored Markdown, source spans, figure readings, manual reading packets, grounded graph patches, atomic knowledge units, route graphs, route templates, route indexes, or answer questions through verified route paths instead of top-k chunks. Do not use for short summaries, simple OCR, ordinary format conversion, or ordinary vector RAG.
+description: Construct, arrange, and read source-verifiable knowledge routing networks for long-form documents and workspaces of constructed KBs. Use for books, PDFs, EPUBs, DOCX, reports, archives, document folders, or multiple constructed knowledge bases when Codex must create anchored Markdown, source spans, figure readings, grounded graph patches, route graphs, route indexes, cross-KB indexes, or answer through verified single-KB/cross-KB route paths instead of top-k chunks. Do not use for short summaries, simple OCR, ordinary format conversion, or ordinary vector RAG.
 ---
 
 # Longform Knowledge Router
 
 ## Purpose
 
-Construct or read a source-verifiable knowledge routing network for long-form documents. Treat the document as a navigable evidence system, not as unordered chunks.
+Construct, arrange, or read source-verifiable knowledge routing networks for long-form documents. Treat each document and cross-KB workspace as a navigable evidence system, not as unordered chunks.
 
 ## Core Rules
 
@@ -18,16 +18,23 @@ Construct or read a source-verifiable knowledge routing network for long-form do
 5. Require source spans for important claims.
 6. Separate hard, semantic, and hypothesis edges.
 7. Prefer the minimum sufficient evidence set.
-8. Always generate a figure atlas during construction. The agent may choose any available vision, OCR, screenshot, PDF-rendering, or asset-extraction toolchain, but the result must be normalized into the atlas contract.
-9. Never treat scripts as a substitute for AI frame-by-frame reading.
-10. Treat `references/read_agent_atandard.md` as the bundled implementation standard for Reading Execution. If a workspace-level `read_agent_atandard.md` is also present, read it as a project override.
-11. Real builds must pass the Deep Reader Agent Gate before graph integration or indexing.
+8. In Arrange Mode, keep cross-KB nodes and edges as bridges to child KB evidence; do not copy child KB graphs or full text into the cross index.
+9. Verified cross-edges require evidence from both child KB sides. Mark one-sided, hypothesis, or needs_review relations explicitly.
+10. Cross-KB answers must cite cross evidence paths, child verified paths, and child source spans.
+11. Always generate a figure atlas during construction. The agent may choose any available vision, OCR, screenshot, PDF-rendering, or asset-extraction toolchain, but the result must be normalized into the atlas contract.
+12. Never treat scripts as a substitute for AI frame-by-frame reading.
+13. Treat `references/read_agent_atandard.md` as the bundled implementation standard for Reading Execution. If a workspace-level `read_agent_atandard.md` is also present, read it as a project override.
+14. Real builds must pass the Deep Reader Agent Gate before graph integration or indexing.
 
 ## Mode Decision
 
 Use Construct Mode when the user provides raw long-form source documents and asks to build, convert, extract, map, index, or create a knowledge routing network.
 
-Use Read Mode when the user provides a constructed `output_dir`, `route_index.sqlite`, or route graph and asks to read, query, trace, compare, cite, verify, or answer from it.
+Use Read Mode when the user provides a constructed `output_dir`, `route_index.sqlite`, route graph, or cross route index and asks to read, query, trace, compare, cite, verify, or answer from it.
+
+Use Arrange Mode when the user provides a workspace containing multiple constructed output directories, multiple `route_index.sqlite` files, or asks to compare, align, synthesize, contrast, verify, or build an index across multiple existing knowledge bases.
+
+Use cross-KB Read Mode when the user provides `cross_route_index.sqlite`, `kb_registry.jsonl`, or an Arrange output directory and asks a cross-document/cross-KB question. Use single-KB Read Mode when only `route_index.sqlite` is provided.
 
 If the user provides both raw documents and a question, construct the network first unless a valid existing network is available. Then answer through Read Mode.
 
@@ -108,6 +115,30 @@ python scripts/validate_build.py --output-dir <output_dir> --profile mvp2
 
 Construct Mode must not answer substantive reading questions from raw documents before the network is constructed unless the user explicitly asks for an ad hoc read.
 
+
+## Arrange Mode
+
+Read `references/arrange_protocol.md`, `references/routing_protocol.md`, `references/route_scoring.md`, `references/quality_gates.md`, and `references/failure_modes.md` before arranging multiple constructed KBs. Arrange Mode builds a bridge layer across child KBs; it does not merge child graphs, copy full text, or turn labels/embeddings into verified cross evidence.
+
+Run the Arrange Skeleton pipeline from this skill folder:
+
+```bash
+python scripts/discover_kbs.py --workspace <workspace_dir> --output-dir <arrange_output>
+python scripts/build_alignment_candidates.py --kb-registry <arrange_output>/kb_registry.jsonl --output-dir <arrange_output>
+python scripts/query_child_kbs.py --alignment-candidates <arrange_output>/alignment_candidates.jsonl --kb-registry <arrange_output>/kb_registry.jsonl --output-dir <arrange_output>
+python scripts/verify_cross_edges.py --alignment-candidates <arrange_output>/alignment_candidates.jsonl --cross-evidence-paths <arrange_output>/cross_evidence_paths.jsonl --output-dir <arrange_output>
+python scripts/build_cross_route_index.py --cross-edges <arrange_output>/cross_edges.jsonl --cross-evidence-paths <arrange_output>/cross_evidence_paths.jsonl --kb-registry <arrange_output>/kb_registry.jsonl --output-dir <arrange_output>
+python scripts/validate_arrange.py --arrange-output <arrange_output> --profile arrange_skeleton
+```
+
+Hard rules:
+
+1. `alignment_candidates.jsonl` contains candidates only; it is not evidence.
+2. `cross_edges.jsonl` may use `verification_status=verified` only when both child KB sides have verified child paths and source spans.
+3. `same_as` requires strong alignment evidence; a shared label is not enough.
+4. `cross_route_index.sqlite` stores cross navigation, relations, evidence paths, and child references only.
+5. If verified cross edges are zero, report Arrange output as partial/skeleton and write repair suggestions.
+
 ## Read Mode
 
 Read `references/routing_protocol.md` and `references/route_scoring.md` before querying. Use route traversal and evidence verification; do not rescan the whole raw document as a substitute for the route network.
@@ -116,6 +147,10 @@ Read `references/routing_protocol.md` and `references/route_scoring.md` before q
 python scripts/query_route.py --question "<question>" --index <output_dir>/route_index.sqlite --mode local_reading --strategy explicit_path --session-dir <query_session_dir>
 python scripts/score_paths.py --route-session <query_session_dir>/route_session.json --candidate-paths <query_session_dir>/candidate_paths.jsonl --mode local_reading
 python scripts/verify_evidence.py --answer <query_session_dir>/answer.json --source-spans <output_dir>/source_spans.jsonl --route-session <query_session_dir>/route_session.json
+
+python scripts/query_route.py --question "<cross question>" --scope cross_kb --cross-index <arrange_output>/cross_route_index.sqlite --kb-registry <arrange_output>/kb_registry.jsonl --mode cross_synthesis --session-dir <query_session_dir>
+python scripts/score_paths.py --route-session <query_session_dir>/route_session.json --candidate-paths <query_session_dir>/candidate_cross_paths.jsonl --mode cross_synthesis
+python scripts/verify_evidence.py --answer <query_session_dir>/answer.json --route-session <query_session_dir>/route_session.json --cross-edges <arrange_output>/cross_edges.jsonl --cross-evidence-paths <arrange_output>/cross_evidence_paths.jsonl
 ```
 
 Use `local_reading` for local explanation, `source_location_query` for page/source lookup, and `concept_trace` for a basic concept evolution path. If the route graph is missing evidence, write `repair_suggestions.jsonl` rather than silently rewriting the index during Read Mode.
@@ -128,6 +163,7 @@ Use `local_reading` for local explanation, `source_location_query` for page/sour
 - `references/reading_context_protocol.md`: reading packet assembly, manual frame reading, and memory-not-evidence rule.
 - `references/deep_reading_agent_protocol.md`: mandatory deep-reader agent gate, reading windows, multi-agent batch protocol, v2 validation, and promotion rules.
 - `references/read_agent_atandard.md`: bundled Reading Execution implementation standard used by deep-reader workers.
+- `references/arrange_protocol.md`: Arrange Mode standards, cross-KB evidence rules, and Read Mode adaptation requirements.
 - `references/routing_protocol.md`: Read Mode session behavior and route modes.
 - `references/route_scoring.md`: scoring fields, penalties, and pruning.
 - `references/vision_reading_protocol.md`: screenshot capture, contextual figure reading, atlas contract, figure routes, and AI-selected tool policy.
@@ -140,13 +176,15 @@ Use `local_reading` for local explanation, `source_location_query` for page/sour
 
 ## Output Contract
 
+Arrange Mode outputs include `arrange_manifest.json`, `kb_registry.jsonl`, `alignment_candidates.jsonl`, `child_query_tasks.jsonl`, `child_query_sessions.jsonl`, `cross_nodes.jsonl`, `cross_edges.jsonl`, `cross_evidence_paths.jsonl`, `cross_route_templates.jsonl`, `cross_route_index.sqlite`, `candidate_generation_report.json`, `arrange_validation_report.json`, `repair_suggestions.jsonl`, and `errors.jsonl`.
+
 Construct Mode MVP-2 outputs must include `book.md`, `assets/`, `source_blocks.jsonl`, `source_span_candidates.jsonl`, `source_spans.jsonl`, `source_segmentation_report.json`, `figures.jsonl`, `tables.jsonl`, `figure_readings.jsonl`, `figure_atom_candidates.jsonl`, `reading_frames.jsonl`, `reading_frame_packets.jsonl`, `graph_patches.jsonl`, `rolling_gists.jsonl`, `concept_registry.jsonl`, `claim_registry.jsonl`, `main_read_status.jsonl`, `atom_candidates.jsonl`, `atoms.jsonl`, `route_nodes.jsonl`, `route_edges.jsonl`, `route_path_templates.jsonl`, `route_graph.json`, `route_index.sqlite`, `repair_suggestions.jsonl`, `build_report.md`, and `errors.jsonl`.
 
 `figure_atlas.json` is mandatory for MVP-2 and must be generated with `artifact_status: "complete"` even when individual figure readings remain uncertain or asset capture is partial. For MVP-2, `figure_routes.jsonl`, `route_communities.jsonl`, and `route_reports.jsonl` may be `stubbed` or `deferred`; mature profile requires `complete`. Each reserved artifact must declare `artifact_status`, `target_mvp`, and `reason` when it is not complete.
 
 ## Validation
 
-Run `scripts/validate_deep_reading.py --output-dir <output_dir>` before promoting v2 deep-reading files. Then run `scripts/validate_build.py --output-dir <output_dir> --profile mvp2` before reporting a build as complete. Validate provenance, source-span legality, reading-frame coverage, main-read-once behavior, graph patch grounding, route explainability, verified/rejected path schema, payload-not-evidence, and absence of `heuristic-demo` patches.
+Run `scripts/validate_deep_reading.py --output-dir <output_dir>` before promoting v2 deep-reading files. Then run `scripts/validate_build.py --output-dir <output_dir> --profile mvp2` before reporting a build as complete. For Arrange Mode, run `scripts/validate_arrange.py --arrange-output <arrange_output> --profile arrange_skeleton` or `arrange_mvp`; do not report `arrange_mvp` complete without at least one verified cross-edge with two-sided child evidence. Validate provenance, source-span legality, reading-frame coverage, main-read-once behavior, graph patch grounding, route explainability, verified/rejected path schema, payload-not-evidence, and absence of `heuristic-demo` patches.
 
 When the skill-creator package is available, run its `scripts/quick_validate.py` against this skill folder after editing the skill itself. This is an external authoring convenience, not a runtime dependency.
 
